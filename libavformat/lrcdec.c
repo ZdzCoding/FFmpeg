@@ -104,15 +104,17 @@ static int64_t read_line(AVBPrint *buf, AVIOContext *pb)
     int64_t pos = avio_tell(pb);
 
     av_bprint_clear(buf);
-    while(!avio_feof(pb)) {
-        int c = avio_r8(pb);
-        if(c != '\r') {
-            av_bprint_chars(buf, c, 1);
-        }
-        if(c == '\n') {
-            break;
-        }
-    }
+    ff_read_line_to_bprint_overwrite(pb, buf);
+
+    // while(!avio_feof(pb)) {
+    //     int c = avio_r8(pb);
+    //     if(c != '\r') {
+    //         av_bprint_chars(buf, c, 1);
+    //     }
+    //     if(c == '\n') {
+    //         break;
+    //     }
+    // }
     return pos;
 }
 
