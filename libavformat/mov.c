@@ -213,7 +213,7 @@ static int mov_read_covr(MOVContext *c, AVIOContext *pb, int type, int len)
     st->priv_data = sc;
 
     if (st->attached_pic.size >= 8 && id != AV_CODEC_ID_BMP) {
-        if (AV_RB64(st->attached_pic.data) == 0x89504e470d0a1a0a) {
+        if (AV_RB64(st->attached_pic.data) == 0x89504e470d0a1a0a || AV_RB64(st->attached_pic.data) == 0x8a4d4e470d0a1a0a) {
             id = AV_CODEC_ID_PNG;
         } else {
             id = AV_CODEC_ID_MJPEG;
