@@ -22,6 +22,7 @@
 #define AVUTIL_APPLICATION_H
 
 #include "libavutil/log.h"
+#include <stddef.h>
 
 #define AVAPP_EVENT_WILL_HTTP_OPEN  1 //AVAppHttpEvent
 #define AVAPP_EVENT_DID_HTTP_OPEN   2 //AVAppHttpEvent
