@@ -942,6 +942,7 @@ const AVInputFormat ff_concat_demuxer = {
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = concat_probe,
     .read_header    = concat_read_header,
+    .read_header2    = concat_read_header,
     .read_packet    = concat_read_packet,
     .read_close     = concat_read_close,
     .read_seek2     = concat_seek,

@@ -457,6 +457,7 @@ const URLProtocol ff_pipe_protocol = {
     .url_open            = pipe_open,
     .url_read            = file_read,
     .url_write           = file_write,
+    .url_seek            = file_seek,
     .url_close           = file_close,
     .url_get_file_handle = file_get_handle,
     .url_check           = file_check,

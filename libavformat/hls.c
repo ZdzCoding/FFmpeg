@@ -2581,6 +2581,7 @@ const AVInputFormat ff_hls_demuxer = {
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = hls_probe,
     .read_header    = hls_read_header,
+    .read_header2    = hls_read_header,
     .read_packet    = hls_read_packet,
     .read_close     = hls_close,
     .read_seek      = hls_read_seek,
