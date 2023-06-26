@@ -173,6 +173,15 @@ int av_dict_set_int(AVDictionary **pm, const char *key, int64_t value,
     return av_dict_set(pm, key, valuestr, flags);
 }
 
+int av_dict_set_intptr(AVDictionary **pm, const char *key, uintptr_t value,
+                int flags)
+{
+    char valuestr[22];
+    snprintf(valuestr, sizeof(valuestr), "%p", value);
+    flags &= ~AV_DICT_DONT_STRDUP_VAL;
+    return av_dict_set(pm, key, valuestr, flags);
+}
+
 uintptr_t av_dict_get_intptr(const AVDictionary *m, const char* key) {
     uintptr_t ptr = NULL;
     AVDictionaryEntry *t = NULL;
