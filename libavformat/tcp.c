@@ -431,9 +431,9 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         }
     }
     if (s->rw_timeout >= 0) {
-        s->open_timeout =
         h->rw_timeout   = s->rw_timeout;
     }
+
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     snprintf(portstr, sizeof(portstr), "%d", port);
@@ -511,21 +511,238 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         // Socket descriptor already closed here. Safe to overwrite to client one.
         fd = ret;
     } else {
-        ret = ff_connect_parallel(ai, s->open_timeout / 1000, 3, h, &fd, customize_fd, s);
-        if (ret < 0)
+        ret = av_application_on_tcp_will_open(s->app_ctx);
+        if (ret) {
+            av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_WILL_TCP_OPEN");
             goto fail1;
+        }
+        ret = ff_connect_parallel(ai, s->open_timeout / 1000, 3, h, &fd, customize_fd, s);
+        if ((ret = ff_connect_parallel(ai, s->open_timeout / 1000, 3, h, &fd, customize_fd, s)) < 0){
+
+            goto fail1;
+        }else{
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control);
+            if (ret) {
+                av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
+                goto fail1;
+            } else if (!dns_entry && !strstr(uri, control.ip) && s->dns_cache_timeout > 0) {
+                add_dns_cache_entry(uri, cur_ai, s->dns_cache_timeout);
+                av_log(NULL, AV_LOG_INFO, "add dns cache uri = %s, ip = %s\n", uri , control.ip);
+            }
+            av_log(NULL, AV_LOG_INFO, "tcp did open uri = %s, ip = %s\n", uri , control.ip);
+        }
     }
 
     h->is_streamed = 1;
     s->fd = fd;
 
-    freeaddrinfo(ai);
+    if (dns_entry) {
+        release_dns_cache_reference(uri, &dns_entry);
+    } else {
+        freeaddrinfo(ai);
+    }
     return 0;
 
  fail1:
     if (fd >= 0)
         closesocket(fd);
-    freeaddrinfo(ai);
+    if (dns_entry) {
+        av_log(NULL, AV_LOG_ERROR, "hit dns cache but connect fail uri = %s, ip = %s\n", uri , control.ip);
+        release_dns_cache_reference(uri, &dns_entry);
+        remove_dns_cache_entry(uri);
+    } else {
+        freeaddrinfo(ai);
+    }
+    return ret;
+}
+
+
+/* return non zero if error */
+static int tcp_fast_open(URLContext *h, const char *http_request, const char *uri, int flags)
+{
+    struct addrinfo hints = { 0 }, *ai, *cur_ai;
+    int port, fd = -1;
+    TCPContext *s = h->priv_data;
+    const char *p;
+    char buf[256];
+    int ret;
+    char hostname[1024],proto[1024],path[1024];
+    char portstr[10];
+    AVAppTcpIOControl control = {0};
+    DnsCacheEntry *dns_entry = NULL;
+    av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname),
+        &port, path, sizeof(path), uri);
+    if (strcmp(proto, "tcp"))
+        return AVERROR(EINVAL);
+    if (port <= 0 || port >= 65536) {
+        av_log(h, AV_LOG_ERROR, "Port missing in uri\n");
+        return AVERROR(EINVAL);
+    }
+    p = strchr(uri, '?');
+
+    if (p) {
+        if (av_find_info_tag(buf, sizeof(buf), "listen", p)) {
+            char *endptr = NULL;
+            s->listen = strtol(buf, &endptr, 10);
+            /* assume if no digits were found it is a request to enable it */
+            if (buf == endptr)
+                s->listen = 1;
+        }
+        if (av_find_info_tag(buf, sizeof(buf), "timeout", p)) {
+            s->rw_timeout = strtol(buf, NULL, 10);
+            if (s->rw_timeout >= 0) {
+                s->open_timeout = s->rw_timeout;
+            }
+        }
+        if (av_find_info_tag(buf, sizeof(buf), "listen_timeout", p)) {
+            s->listen_timeout = strtol(buf, NULL, 10);
+        }
+    }
+    if (s->rw_timeout >= 0 ) {
+        h->rw_timeout = s->rw_timeout;
+    }
+
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    if (s->listen)
+        hints.ai_flags |= AI_PASSIVE;
+
+    if (s->dns_cache_timeout > 0) {
+        if (s->dns_cache_clear) {
+            av_log(NULL, AV_LOG_INFO, "will delete dns cache entry, uri = %s\n", uri);
+            remove_dns_cache_entry(uri);
+        } else {
+            dns_entry = get_dns_cache_reference(uri);
+        }
+    }
+
+    if (!dns_entry) {
+#ifdef HAVE_PTHREADS
+        ret = ijk_tcp_getaddrinfo_nonblock(hostname, portstr, &hints, &ai, s->addrinfo_timeout, &h->interrupt_callback, s->addrinfo_one_by_one);
+#else
+        if (s->addrinfo_timeout > 0)
+            av_log(h, AV_LOG_WARNING, "Ignore addrinfo_timeout without pthreads support.\n");
+        if (!hostname[0])
+            ret = getaddrinfo(NULL, portstr, &hints, &ai);
+        else
+            ret = getaddrinfo(hostname, portstr, &hints, &ai);
+#endif
+
+        if (ret) {
+            av_log(h, AV_LOG_ERROR,
+                "Failed to resolve hostname %s: %s\n",
+                hostname, gai_strerror(ret));
+            return AVERROR(EIO);
+        }
+
+        cur_ai = ai;
+    } else {
+        av_log(NULL, AV_LOG_INFO, "hit dns cache uri = %s\n", uri);
+        cur_ai = dns_entry->res;
+    }
+
+ restart:
+#if HAVE_STRUCT_SOCKADDR_IN6
+    // workaround for IOS9 getaddrinfo in IPv6 only network use hardcode IPv4 address can not resolve port number.
+    if (cur_ai->ai_family == AF_INET6){
+        struct sockaddr_in6 * sockaddr_v6 = (struct sockaddr_in6 *)cur_ai->ai_addr;
+        if (!sockaddr_v6->sin6_port){
+            sockaddr_v6->sin6_port = htons(port);
+        }
+    }
+#endif
+    fd = ff_socket(cur_ai->ai_family,
+                   cur_ai->ai_socktype,
+                   cur_ai->ai_protocol);
+    if (fd < 0) {
+        ret = ff_neterrno();
+        goto fail;
+    }
+    /* Set the socket's send or receive buffer sizes, if specified.
+       If unspecified or setting fails, system default is used. */
+    if (s->recv_buffer_size > 0) {
+        setsockopt (fd, SOL_SOCKET, SO_RCVBUF, &s->recv_buffer_size, sizeof (s->recv_buffer_size));
+    }
+    if (s->send_buffer_size > 0) {
+        setsockopt (fd, SOL_SOCKET, SO_SNDBUF, &s->send_buffer_size, sizeof (s->send_buffer_size));
+    }
+    if (s->listen == 2) {
+        // multi-client
+        if ((ret = ff_listen(fd, cur_ai->ai_addr, cur_ai->ai_addrlen)) < 0)
+            goto fail1;
+    } else if (s->listen == 1) {
+        // single client
+        if ((ret = ff_listen_bind(fd, cur_ai->ai_addr, cur_ai->ai_addrlen,
+                                  s->listen_timeout, h)) < 0)
+            goto fail1;
+        // Socket descriptor already closed here. Safe to overwrite to client one.
+        fd = ret;
+    } else {
+        ret = av_application_on_tcp_will_open(s->app_ctx);
+        if (ret) {
+            av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_WILL_TCP_OPEN");
+            goto fail1;
+        }
+
+        if ((ret = ff_sendto(fd, http_request, strlen(http_request), FAST_OPEN_FLAG,
+                 cur_ai->ai_addr, cur_ai->ai_addrlen, s->open_timeout / 1000, h, !!cur_ai->ai_next)) < 0) {
+            s->fastopen_success = 0;
+            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control))
+                goto fail1;
+            if (ret == AVERROR_EXIT)
+                goto fail1;
+            else
+                goto fail;
+        } else {
+            if (ret == 0) {
+                s->fastopen_success = 0;
+            } else {
+                s->fastopen_success = 1;
+            }
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control);
+            if (ret) {
+                av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
+                goto fail1;
+            } else if (!dns_entry && !strstr(uri, control.ip) && s->dns_cache_timeout > 0) {
+                add_dns_cache_entry(uri, cur_ai, s->dns_cache_timeout);
+                av_log(NULL, AV_LOG_INFO, "add dns cache uri = %s, ip = %s\n", uri , control.ip);
+            }
+            av_log(NULL, AV_LOG_INFO, "tcp did open uri = %s, ip = %s\n", uri , control.ip);
+        }
+    }
+
+    h->is_streamed = 1;
+    s->fd = fd;
+
+    if (dns_entry) {
+        release_dns_cache_reference(uri, &dns_entry);
+    } else {
+        freeaddrinfo(ai);
+    }
+    return 0;
+
+ fail:
+    if (cur_ai->ai_next) {
+        /* Retry with the next sockaddr */
+        cur_ai = cur_ai->ai_next;
+        if (fd >= 0)
+            closesocket(fd);
+        ret = 0;
+        goto restart;
+    }
+ fail1:
+    if (fd >= 0)
+        closesocket(fd);
+
+    if (dns_entry) {
+        av_log(NULL, AV_LOG_ERROR, "hit dns cache but connect fail uri = %s, ip = %s\n", uri , control.ip);
+        release_dns_cache_reference(uri, &dns_entry);
+        remove_dns_cache_entry(uri);
+    } else {
+        freeaddrinfo(ai);
+    }
+
     return ret;
 }
 
@@ -570,9 +787,32 @@ static int tcp_write(URLContext *h, const uint8_t *buf, int size)
 
     if (!(h->flags & AVIO_FLAG_NONBLOCK)) {
         ret = ff_network_wait_fd_timeout(s->fd, 1, h->rw_timeout, &h->interrupt_callback);
-        if (ret)
+        if (ret) {
+            if (ret == AVERROR(ETIMEDOUT)) {
+                ret = AVERROR_TCP_WRITE_TIMEOUT;
+            }
             return ret;
+        }
     }
+
+    if (s->fastopen && !s->tcp_connected && av_stristart(buf, "GET", NULL)) {
+        ret = tcp_fast_open(h, buf, s->uri, 0);
+        if (!ret) {
+            s->tcp_connected = 1;
+            if (!s->fastopen_success) {
+                ret = send(s->fd, buf, size, MSG_NOSIGNAL);
+                if (ret > 0) {
+                    s->fastopen_success = 1;
+                }
+                return ret < 0 ? ff_neterrno() : ret;
+            }
+            return ret;
+        } else {
+            av_log(NULL, AV_LOG_WARNING, "tcp_fast_open is error ret = %d\n", ret);
+            return ret;
+        }
+    }
+
     ret = send(s->fd, buf, size, MSG_NOSIGNAL);
     return ret < 0 ? ff_neterrno() : ret;
 }

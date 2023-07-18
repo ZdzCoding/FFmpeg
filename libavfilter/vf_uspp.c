@@ -255,7 +255,7 @@ static void filter(USPPContext *p, uint8_t *dst[3], uint8_t *src[3],
         p->frame->data[2] = p->src[2] + x1c  + y1c  * p->frame->linesize[2];
         p->frame->format  = p->avctx_enc[i]->pix_fmt;
 
-        ret = avcodec_encode_video2(p->avctx_enc[i], pkt, p->frame, &got_pkt_ptr);
+        // ret = avcodec_encode_video2(p->avctx_enc[i], pkt, p->frame, &got_pkt_ptr);
         if (ret < 0) {
             av_log(p->avctx_enc[i], AV_LOG_ERROR, "Encoding failed\n");
             continue;
