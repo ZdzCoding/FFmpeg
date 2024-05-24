@@ -158,6 +158,7 @@ struct MpegTSContext {
 
     int skip_changes;
     int skip_clear;
+    int seek_flag_keyframe;
     int skip_unknown_pmt;
 
     int scan_all_pmts;
@@ -203,6 +204,8 @@ static const AVOption options[] = {
      {.i64 = 0}, 0, 1, 0 },
     {"max_packet_size", "maximum size of emitted packet", offsetof(MpegTSContext, max_packet_size), AV_OPT_TYPE_INT,
      {.i64 = 204800}, 1, INT_MAX/2, AV_OPT_FLAG_DECODING_PARAM },
+    {"seek_flag_keyframe", "seek use keyframe mode", offsetof(MpegTSContext, seek_flag_keyframe), AV_OPT_TYPE_BOOL,
+     {.i64 = 1}, 0, 1, AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
 
@@ -3351,9 +3354,10 @@ static int64_t mpegts_get_dts(AVFormatContext *s, int stream_index,
             av_packet_free(&pkt);
             return AV_NOPTS_VALUE;
         }
-        if (pkt->dts != AV_NOPTS_VALUE && pkt->pos >= 0) {
+
+        if (pkt->dts != AV_NOPTS_VALUE && pkt->pos >= 0 && (!ts->seek_flag_keyframe || (pkt->flags & AV_PKT_FLAG_KEY))) {
             ff_reduce_index(s, pkt->stream_index);
-            av_add_index_entry(s->streams[pkt->stream_index], pkt->pos, pkt->dts, 0, 0, AVINDEX_KEYFRAME /* FIXME keyframe? */);
+            av_add_index_entry(s->streams[pkt->stream_index], pkt->pos, pkt->dts, 0, 0, AVINDEX_KEYFRAME);
             if (pkt->stream_index == stream_index && pkt->pos >= *ppos) {
                 int64_t dts = pkt->dts;
                 *ppos = pkt->pos;
