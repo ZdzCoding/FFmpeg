@@ -349,6 +349,17 @@ int avformat_open_input(AVFormatContext **ps, const char *filename,
         ff_id3v2_free_extra_meta(&id3v2_extra_meta);
     }
 
+    //fill stream info
+    if (s->pb) {
+        URLContext *url_context = ffio_geturlcontext(s->pb);
+        if (url_context && url_context->prot) {
+            URLProtocol *prot = url_context->prot;
+            if (prot->url_parse_priv) {
+                prot->url_parse_priv(s, url_context);
+            }
+        }
+    }
+
     if ((ret = avformat_queue_attached_pictures(s)) < 0)
         goto close;
 
