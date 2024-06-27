@@ -487,7 +487,13 @@ int ff_img_read_packet(AVFormatContext *s1, AVPacket *pkt)
         if (s->frame_size > 0) {
             size[0] = s->frame_size;
         } else if (!ffstream(s1->streams[0])->parser) {
-            size[0] = avio_size(s1->pb);
+            //http Transfer-Encoding: chunked the size is -78;
+            int64_t s = avio_size(s1->pb);
+            if (s < 0) {
+                size[0] = 4096;
+            } else {
+                size[0] = s;
+            }
         } else {
             size[0] = 4096;
         }
