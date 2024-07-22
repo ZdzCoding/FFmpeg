@@ -82,6 +82,8 @@ extern const URLProtocol ff_ijksegment_protocol;
 extern const URLProtocol ff_ijktcphook_protocol;
 extern const URLProtocol ff_ijkio_protocol;
 
+extern const URLProtocol ff_dvd_protocol;
+
 #include "libavformat/protocol_list.c"
 
 const AVClass *ff_urlcontext_child_class_iterate(void **iter)
