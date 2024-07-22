@@ -79,6 +79,7 @@ HEADERS = adler32.h                                                     \
           spherical.h                                                   \
           stereo3d.h                                                    \
           threadmessage.h                                               \
+          thread.h                                                      \
           time.h                                                        \
           timecode.h                                                    \
           timestamp.h                                                   \
