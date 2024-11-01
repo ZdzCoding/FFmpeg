@@ -1719,7 +1719,10 @@ static int find_timestamp_in_playlist(HLSContext *c, struct playlist *pls,
 
     if (timestamp < pos) {
         *seq_no = pls->start_seq_no;
-        return 0;
+        if (seg_start_ts) {
+            *seg_start_ts = pos;
+        }
+        return 1;
     }
 
     for (i = 0; i < pls->n_segments; i++) {
