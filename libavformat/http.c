@@ -77,6 +77,7 @@ typedef struct HTTPContext {
     char *uri;
     char *location;
     HTTPAuthState auth_state;
+    int auth_type2;
     HTTPAuthState proxy_auth_state;
     char *http_proxy;
     char *headers;
@@ -165,6 +166,7 @@ static const AVOption options[] = {
     { "icy_metadata_packet", "return current ICY metadata packet", OFFSET(icy_metadata_packet), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_EXPORT },
     { "metadata", "metadata read from the bitstream", OFFSET(metadata), AV_OPT_TYPE_DICT, {0}, 0, 0, AV_OPT_FLAG_EXPORT },
     { "auth_type", "HTTP authentication type", OFFSET(auth_state.auth_type), AV_OPT_TYPE_INT, { .i64 = HTTP_AUTH_NONE }, HTTP_AUTH_NONE, HTTP_AUTH_BASIC, D | E, "auth_type"},
+    { "auth_type2", "backup HTTP authentication type for seek request", OFFSET(auth_type2), AV_OPT_TYPE_INT, { .i64 = HTTP_AUTH_NONE }, HTTP_AUTH_NONE, HTTP_AUTH_BASIC, D | E, "auth_type"},
     { "none", "No auth method set, autodetect", 0, AV_OPT_TYPE_CONST, { .i64 = HTTP_AUTH_NONE }, 0, 0, D | E, "auth_type"},
     { "basic", "HTTP basic authentication", 0, AV_OPT_TYPE_CONST, { .i64 = HTTP_AUTH_BASIC }, 0, 0, D | E, "auth_type"},
     { "send_expect_100", "Force sending an Expect: 100-continue header for POST", OFFSET(send_expect_100), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, E },
@@ -698,6 +700,11 @@ static int http_open(URLContext *h, const char *uri, int flags,
     HTTPContext *s = h->priv_data;
     int ret;
     s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
+
+    if (s->auth_type2 == HTTP_AUTH_NONE) {
+        //backup the init auth_type, when not assign.
+        s->auth_type2 = s->auth_state.auth_type;
+    }
 
     if( s->seekable == 1 )
         h->is_streamed = 0;
@@ -1424,6 +1431,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     uint64_t off = s->off;
     const char *method;
     int send_expect_100 = 0;
+    int cur_auth_type = s->auth_state.auth_type;
 
     av_bprint_init_for_buffer(&request, s->buffer, sizeof(s->buffer));
 
@@ -1565,9 +1573,19 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
 
     if (s->new_location)
         s->off = off;
-
     err = (off == s->off) ? 0 : -1;
+
+    //in http_seek_internal func reverted to the original uri,but the s->off is not zero，so err is -1，cause can't goto the 401 authenticate logic.
+    if (err != 0 && cur_auth_type != s->auth_state.auth_type && s->http_code == 401) {
+        //reverte the off,otherwise can't seek the target position.
+        s->off = off;
+        av_log(NULL, AV_LOG_ERROR, "http 401 error,need authenticate:%s,at:%llu\n", s->buffer, s->off);
+        err = 0;
+    }
 done:
+    if (err != 0) {
+        av_log(NULL, AV_LOG_ERROR, "http error %d,%s\n", s->http_code,s->buffer);
+    }
     av_freep(&authstr);
     av_freep(&proxyauthstr);
     return err;
@@ -1957,6 +1975,8 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
             return s->off;
     }
 
+    // http_seek use lasest redirect location, because after redirect, reset the auth_state: `memset(&s->auth_state, 0, sizeof(s->auth_state));`
+
     /* if the location changed (redirect), revert to the original uri */
     if (strcmp(s->uri, s->location)) {
         char *new_uri;
@@ -1965,6 +1985,9 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
             return AVERROR(ENOMEM);
         av_free(s->location);
         s->location = new_uri;
+        if (s->auth_type2 != HTTP_AUTH_NONE) {
+            s->auth_state.auth_type = s->auth_type2;
+        }
     }
 
     /* we save the old context in case the seek fails */
