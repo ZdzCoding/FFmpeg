@@ -23,7 +23,9 @@
 #include "libavutil/parseutils.h"
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
+#include "libavutil/avstring.h"
 
+#include "application.h"
 #include "internal.h"
 #include "network.h"
 #include "os_support.h"
@@ -45,6 +47,9 @@ typedef struct TCPContext {
 #if !HAVE_WINSOCK2_H
     int tcp_mss;
 #endif /* !HAVE_WINSOCK2_H */
+
+    char * app_ctx_intptr;
+    AVApplicationContext *app_ctx;
 } TCPContext;
 
 #define OFFSET(x) offsetof(TCPContext, x)
@@ -60,6 +65,8 @@ static const AVOption options[] = {
 #if !HAVE_WINSOCK2_H
     { "tcp_mss",     "Maximum segment size for outgoing TCP packets",          OFFSET(tcp_mss),     AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
 #endif /* !HAVE_WINSOCK2_H */
+    { "ijkapplication",   "AVApplicationContext",                              OFFSET(app_ctx_intptr),   AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, .flags = D },
+    { "connect_timeout",  "set connect timeout (in microseconds) of socket", OFFSET(open_timeout),     AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
     { NULL }
 };
 
@@ -110,7 +117,21 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     int ret;
     char hostname[1024],proto[1024],path[1024];
     char portstr[10];
-    s->open_timeout = 5000000;
+    AVAppTcpIOControl control = {0};
+
+    int ret2;
+    if (s->open_timeout < 0) {
+        s->open_timeout = 15000000;
+    }
+    // av_log(NULL, AV_LOG_INFO, "xql tcp_open uri %s", uri);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %s\n", 12, "xql tcp_open verify", 28, "ijkapplication", s->app_ctx_intptr);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %d\n", 12, "xql tcp_open verify", 28, "connect_timeout", s->open_timeout);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %d\n", 12, "xql tcp_open verify", 28, "addrinfo_one_by_one", s->addrinfo_one_by_one);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %d\n", 12, "xql tcp_open verify", 28, "addrinfo_timeout", s->addrinfo_timeout);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %d\n", 12, "xql tcp_open verify", 28, "dns_cache_timeout", s->dns_cache_timeout);
+    // av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %d\n", 12, "xql tcp_open verify", 28, "dns_cache_clear", s->dns_cache_clear);
+
+    s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
 
     av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname),
         &port, path, sizeof(path), uri);
@@ -131,6 +152,9 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         }
         if (av_find_info_tag(buf, sizeof(buf), "timeout", p)) {
             s->rw_timeout = strtol(buf, NULL, 10);
+            if (s->rw_timeout >= 0) {
+                s->open_timeout = s->rw_timeout;
+            }
         }
         if (av_find_info_tag(buf, sizeof(buf), "listen_timeout", p)) {
             s->listen_timeout = strtol(buf, NULL, 10);
@@ -140,7 +164,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         }
     }
     if (s->rw_timeout >= 0) {
-        s->open_timeout =
+        //s->open_timeout =
         h->rw_timeout   = s->rw_timeout;
     }
     hints.ai_family = AF_UNSPEC;
@@ -198,9 +222,24 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         // Socket descriptor already closed here. Safe to overwrite to client one.
         fd = ret;
     } else {
-        ret = ff_connect_parallel(ai, s->open_timeout / 1000, 3, h, &fd, customize_fd, s);
+        ret = av_application_on_tcp_will_open(s->app_ctx);
+        if (ret) {
+            av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_WILL_TCP_OPEN");
+            goto fail1;
+        }
+        ret = ff_connect_parallel(cur_ai, s->open_timeout / 1000, 3, h, &fd, customize_fd, s);
+
+        ret2 = av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control);
+
         if (ret < 0)
             goto fail1;
+
+        if (ret2) {
+            av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
+            ret = ret2;
+            goto fail1;
+        }
+        av_log(NULL, AV_LOG_INFO, "tcp did open uri = %s, ip = %s\n", uri , control.ip);
     }
 
     h->is_streamed = 1;
@@ -241,12 +280,18 @@ static int tcp_read(URLContext *h, uint8_t *buf, int size)
 
     if (!(h->flags & AVIO_FLAG_NONBLOCK)) {
         ret = ff_network_wait_fd_timeout(s->fd, 0, h->rw_timeout, &h->interrupt_callback);
-        if (ret)
+        if (ret) {
+            if (ret == AVERROR(ETIMEDOUT)) {
+                ret = AVERROR_TCP_READ_TIMEOUT;
+            }
             return ret;
+        }
     }
     ret = recv(s->fd, buf, size, 0);
     if (ret == 0)
         return AVERROR_EOF;
+    if (ret > 0)
+        av_application_did_io_tcp_read(s->app_ctx, (void*)h, ret);
     return ret < 0 ? ff_neterrno() : ret;
 }
 
@@ -257,9 +302,14 @@ static int tcp_write(URLContext *h, const uint8_t *buf, int size)
 
     if (!(h->flags & AVIO_FLAG_NONBLOCK)) {
         ret = ff_network_wait_fd_timeout(s->fd, 1, h->rw_timeout, &h->interrupt_callback);
-        if (ret)
+        if (ret) {
+            if (ret == AVERROR(ETIMEDOUT)) {
+                ret = AVERROR_TCP_WRITE_TIMEOUT;
+            }
             return ret;
+        }
     }
+
     ret = send(s->fd, buf, size, MSG_NOSIGNAL);
     return ret < 0 ? ff_neterrno() : ret;
 }
