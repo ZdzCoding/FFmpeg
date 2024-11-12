@@ -42,6 +42,7 @@
 #include "os_support.h"
 #include "url.h"
 #include "version.h"
+#include "application.h"
 
 /* XXX: POST protocol is not completely implemented because ffmpeg uses
  * only a subset of it. */
@@ -136,6 +137,9 @@ typedef struct HTTPContext {
     char *new_location;
     AVDictionary *redirect_cache;
     uint64_t filesize_from_content_range;
+    char *tcp_hook;
+    char *app_ctx_intptr;
+    AVApplicationContext *app_ctx;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
@@ -178,6 +182,8 @@ static const AVOption options[] = {
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
     { "short_seek_size", "Threshold to favor readahead over seek.", OFFSET(short_seek_size), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, D },
+    { "http-tcp-hook", "hook protocol on tcp", OFFSET(tcp_hook), AV_OPT_TYPE_STRING, { .str = "tcp" }, 0, 0, D | E },
+    { "ijkapplication", "AVApplicationContext", OFFSET(app_ctx_intptr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, .flags = D },
     { NULL }
 };
 
@@ -208,6 +214,7 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     char buf[1024], urlbuf[MAX_URL_SIZE];
     int port, use_proxy, err = 0;
     HTTPContext *s = h->priv_data;
+    lower_proto = s->tcp_hook;
 
     av_url_split(proto, sizeof(proto), auth, sizeof(auth),
                  hostname, sizeof(hostname), &port,
@@ -263,6 +270,13 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     ff_url_join(buf, sizeof(buf), lower_proto, NULL, hostname, port, NULL);
 
     if (!s->hd) {
+        av_dict_set_intptr(options, "ijkapplication", (uintptr_t)s->app_ctx, 0);
+
+        // AVDictionaryEntry *t = NULL;
+        // while ((t = av_dict_get(*options, "", t, AV_DICT_IGNORE_SUFFIX))) {
+        //     av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %s\n", 12, "http open tcp", 28, t->key, t->value);
+        // }
+
         err = ffurl_open_whitelist(&s->hd, buf, AVIO_FLAG_READ_WRITE,
                                    &h->interrupt_callback, options,
                                    h->protocol_whitelist, h->protocol_blacklist, h);
@@ -683,6 +697,7 @@ static int http_open(URLContext *h, const char *uri, int flags,
 {
     HTTPContext *s = h->priv_data;
     int ret;
+    s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
 
     if( s->seekable == 1 )
         h->is_streamed = 0;
@@ -719,7 +734,9 @@ static int http_open(URLContext *h, const char *uri, int flags,
     if (s->listen) {
         return http_listen(h, uri, flags, options);
     }
+    av_application_will_http_open(s->app_ctx, (void*)h, uri);
     ret = http_open_cnx(h, options);
+    av_application_did_http_open(s->app_ctx, (void*)h, uri, ret, s->http_code, s->filesize);
 bail_out:
     if (ret < 0) {
         av_dict_free(&s->chained_options);
@@ -1610,7 +1627,14 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         uint64_t target_end = s->end_off ? s->end_off : s->filesize;
         if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
             return AVERROR_EOF;
-        len = ffurl_read(s->hd, buf, size);
+        len = size;
+        if (s->filesize > 0 && s->filesize != UINT64_MAX && s->filesize != INT32_MAX) {
+            int64_t unread = s->filesize - s->off;
+            if (len > unread)
+                len = (int)unread;
+        }
+        if (len > 0)
+            len = ffurl_read(s->hd, buf, len);
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
@@ -1949,7 +1973,9 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
     s->hd = NULL;
 
     /* if it fails, continue on old connection */
+    av_application_will_http_seek(s->app_ctx, (void*)h, s->location, off);
     if ((ret = http_open_cnx(h, &options)) < 0) {
+        av_application_did_http_seek(s->app_ctx, (void*)h, s->location, off, ret, s->http_code);
         av_dict_free(&options);
         memcpy(s->buffer, old_buf, old_buf_size);
         s->buf_ptr = s->buffer;
@@ -1958,6 +1984,7 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
         s->off     = old_off;
         return ret;
     }
+    av_application_did_http_seek(s->app_ctx, (void*)h, s->location, off, ret, s->http_code);
     av_dict_free(&options);
     ffurl_close(old_hd);
     return off;
@@ -2051,6 +2078,7 @@ static int http_proxy_open(URLContext *h, const char *uri, int flags)
     HTTPAuthType cur_auth_type;
     char *authstr;
 
+    s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
     if( s->seekable == 1 )
         h->is_streamed = 0;
     else
@@ -2063,7 +2091,7 @@ static int http_proxy_open(URLContext *h, const char *uri, int flags)
     if (*path == '/')
         path++;
 
-    ff_url_join(lower_url, sizeof(lower_url), "tcp", NULL, hostname, port,
+    ff_url_join(lower_url, sizeof(lower_url), s->tcp_hook, NULL, hostname, port,
                 NULL);
 redo:
     ret = ffurl_open_whitelist(&s->hd, lower_url, AVIO_FLAG_READ_WRITE,
