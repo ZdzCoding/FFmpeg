@@ -222,6 +222,7 @@ typedef struct HLSContext {
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
     AVDictionary *seg_format_opts;
+    char *seg_inherit_opts;
     char *allowed_extensions;
     int max_reload;
     int http_persistent;
@@ -1945,7 +1946,32 @@ static int hls_close(AVFormatContext *s)
     return 0;
 }
 
-static int hls_read_header(AVFormatContext *s)
+static int copy_hls_headers_for_http(AVDictionary **dst, const AVDictionary *src, const char *opts)
+{
+    if (!opts)
+        return 0;
+
+    char *my_opts = opts;
+    char *saved = NULL;
+    char *opt = NULL;
+    int ret = 0;
+
+    while ((opt = av_strtok(my_opts, ",", &saved))) {
+        AVDictionaryEntry *t = NULL;
+        while ((t = av_dict_get(src, "", t, AV_DICT_IGNORE_SUFFIX))) {
+            if (t->key && !strcmp(t->key, opt)) {
+                ret = av_dict_set(dst, t->key, t->value, 0);
+                if (ret < 0)
+                    return ret;
+            }
+        }
+        my_opts = saved;
+    }
+
+    return ret;
+}
+
+static int hls_read_header2(AVFormatContext *s, AVDictionary **a_options)
 {
     HLSContext *c = s->priv_data;
     int ret = 0, i;
@@ -1958,8 +1984,19 @@ static int hls_read_header(AVFormatContext *s)
     c->first_timestamp = AV_NOPTS_VALUE;
     c->cur_timestamp = AV_NOPTS_VALUE;
 
+    //pb only include keys which in hls_options list.
     if ((ret = ffio_copy_url_options(s->pb, &c->avio_opts)) < 0)
         return ret;
+
+    //current a_options is original options,you can filter special keys
+    copy_hls_headers_for_http(&c->avio_opts, *a_options, c->seg_inherit_opts);
+    //use segment format options override inherit options.
+    av_dict_copy(&c->avio_opts, c->seg_format_opts, 0);
+
+    // AVDictionaryEntry *t = NULL;
+    // while ((t = av_dict_get(c->avio_opts, "", t, AV_DICT_IGNORE_SUFFIX))) {
+    //     av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %s\n", 12, "hls_read_header2", 28, t->key, t->value);
+    // }
 
     /* XXX: Some HLS servers don't like being sent the range header,
        in this case, need to  setting http_seekable = 0 to disable
@@ -2057,6 +2094,7 @@ static int hls_read_header(AVFormatContext *s)
         pls->needed = 1;
         pls->parent = s;
 
+        av_dict_copy(&options, c->avio_opts, 0);
         /*
          * If this is a live stream and this playlist looks like it is one segment
          * behind, try to sync it up so that every substream starts at the same
@@ -2164,8 +2202,6 @@ static int hls_read_header(AVFormatContext *s)
 
         if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
             return ret;
-
-        av_dict_copy(&options, c->seg_format_opts, 0);
 
         ret = avformat_open_input(&pls->ctx, pls->segments[0]->url, in_fmt, &options);
         av_dict_free(&options);
@@ -2607,6 +2643,7 @@ static const AVOption hls_options[] = {
         OFFSET(seg_format_opts), AV_OPT_TYPE_DICT, {.str = NULL}, 0, 0, FLAGS},
     {"seg_max_retry", "Maximum number of times to reload a segment on error.",
      OFFSET(seg_max_retry), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, FLAGS},
+    {"seg_inherit_options", "Special keys inherit form options,apply for segment demuxer", OFFSET(seg_inherit_opts), AV_OPT_TYPE_STRING, {.str = NULL}, INT_MIN, INT_MAX, FLAGS},
     {NULL}
 };
 
@@ -2625,7 +2662,7 @@ const AVInputFormat ff_hls_demuxer = {
     .flags          = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = hls_probe,
-    .read_header    = hls_read_header,
+    .read_header2    = hls_read_header2,
     .read_packet    = hls_read_packet,
     .read_close     = hls_close,
     .read_seek      = hls_read_seek,
