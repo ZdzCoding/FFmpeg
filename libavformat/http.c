@@ -126,6 +126,7 @@ typedef struct HTTPContext {
     int reconnect_on_network_error;
     int reconnect_streamed;
     int reconnect_delay_max;
+    int reconnect_first_delay;
     char *reconnect_on_http_error;
     int listen;
     char *resource;
@@ -180,6 +181,7 @@ static const AVOption options[] = {
     { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_delay_max", "max reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_max), AV_OPT_TYPE_INT, { .i64 = 120 }, 0, UINT_MAX/1000/1000, D },
+    { "reconnect_first_delay", "first reconnect delay in seconds", OFFSET(reconnect_first_delay), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, UINT_MAX/1000/1000, D },
     { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, D | E },
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
@@ -370,7 +372,7 @@ static int http_open_cnx(URLContext *h, AVDictionary **options)
     HTTPAuthType cur_auth_type, cur_proxy_auth_type;
     HTTPContext *s = h->priv_data;
     int ret, attempts = 0, redirects = 0;
-    int reconnect_delay = 0;
+    int reconnect_delay = s->reconnect_first_delay;
     uint64_t off;
     char *cached;
 
