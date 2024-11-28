@@ -560,6 +560,11 @@ extern const AVInputFormat  ff_vapoursynth_demuxer;
 extern AVInputFormat  ff_ijklivehook_demuxer;
 extern AVInputFormat  ff_ijklas_demuxer;
 
+extern AVInputFormat  ff_ijkplaceholder1_demuxer;
+extern AVInputFormat  ff_ijkplaceholder2_demuxer;
+extern AVInputFormat  ff_ijkplaceholder3_demuxer;
+extern AVInputFormat  ff_ijkplaceholder4_demuxer;
+
 #include "libavformat/muxer_list.c"
 #include "libavformat/demuxer_list.c"
 
