@@ -3223,6 +3223,13 @@ void av_fast_padded_mallocz(void *ptr, unsigned int *size, size_t min_size);
  */
 int avcodec_is_open(AVCodecContext *s);
 
+
+
+
+int av_hevc_decode_nal_units(const uint8_t *buf, int buf_size, int is_nalff, int nal_length_size,
+                             int err_recognition, int apply_defdispwin, void *logctx);
+
+
 /**
  * @}
  */

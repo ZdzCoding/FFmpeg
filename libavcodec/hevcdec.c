@@ -668,8 +668,7 @@ static int hls_slice_header(HEVCContext *s)
                    sh->slice_type);
             return AVERROR_INVALIDDATA;
         }
-        if (IS_IRAP(s) && sh->slice_type != HEVC_SLICE_I &&
-            !s->ps.pps->pps_curr_pic_ref_enabled_flag) {
+        if (IS_IRAP(s) && sh->slice_type != HEVC_SLICE_I) {
             av_log(s->avctx, AV_LOG_ERROR, "Inter slices in an IRAP frame.\n");
             return AVERROR_INVALIDDATA;
         }
@@ -840,14 +839,6 @@ static int hls_slice_header(HEVCContext *s)
                        sh->max_num_merge_cand);
                 return AVERROR_INVALIDDATA;
             }
-
-            // Syntax in 7.3.6.1
-            if (s->ps.sps->motion_vector_resolution_control_idc == 2)
-                sh->use_integer_mv_flag = get_bits1(gb);
-            else
-                // Inferred to be equal to motion_vector_resolution_control_idc if not present
-                sh->use_integer_mv_flag = s->ps.sps->motion_vector_resolution_control_idc;
-
         }
 
         sh->slice_qp_delta = get_se_golomb(gb);
@@ -863,12 +854,6 @@ static int hls_slice_header(HEVCContext *s)
         } else {
             sh->slice_cb_qp_offset = 0;
             sh->slice_cr_qp_offset = 0;
-        }
-
-        if (s->ps.pps->pps_slice_act_qp_offsets_present_flag) {
-            sh->slice_act_y_qp_offset  = get_se_golomb(gb);
-            sh->slice_act_cb_qp_offset = get_se_golomb(gb);
-            sh->slice_act_cr_qp_offset = get_se_golomb(gb);
         }
 
         if (s->ps.pps->chroma_qp_offset_list_enabled_flag)
@@ -1538,7 +1523,8 @@ static void luma_mc_uni(HEVCLocalContext *lc, uint8_t *dst, ptrdiff_t dststride,
 
     if (x_off < QPEL_EXTRA_BEFORE || y_off < QPEL_EXTRA_AFTER ||
         x_off >= pic_width - block_w - QPEL_EXTRA_AFTER ||
-        y_off >= pic_height - block_h - QPEL_EXTRA_AFTER) {
+        y_off >= pic_height - block_h - QPEL_EXTRA_AFTER ||
+        ref == s->frame) {
         const ptrdiff_t edge_emu_stride = EDGE_EMU_BUFFER_STRIDE << s->ps.sps->pixel_shift;
         int offset     = QPEL_EXTRA_BEFORE * srcstride       + (QPEL_EXTRA_BEFORE << s->ps.sps->pixel_shift);
         int buf_offset = QPEL_EXTRA_BEFORE * edge_emu_stride + (QPEL_EXTRA_BEFORE << s->ps.sps->pixel_shift);
@@ -1688,6 +1674,7 @@ static void chroma_mc_uni(HEVCLocalContext *lc, uint8_t *dst0,
     intptr_t my          = av_mod_uintp2(mv->y, 2 + vshift);
     intptr_t _mx         = mx << (1 - hshift);
     intptr_t _my         = my << (1 - vshift);
+    int emu              = src0 == s->frame->data[1] || src0 == s->frame->data[2];
 
     x_off += mv->x >> (2 + hshift);
     y_off += mv->y >> (2 + vshift);
@@ -1695,7 +1682,8 @@ static void chroma_mc_uni(HEVCLocalContext *lc, uint8_t *dst0,
 
     if (x_off < EPEL_EXTRA_BEFORE || y_off < EPEL_EXTRA_AFTER ||
         x_off >= pic_width - block_w - EPEL_EXTRA_AFTER ||
-        y_off >= pic_height - block_h - EPEL_EXTRA_AFTER) {
+        y_off >= pic_height - block_h - EPEL_EXTRA_AFTER ||
+        emu) {
         const int edge_emu_stride = EDGE_EMU_BUFFER_STRIDE << s->ps.sps->pixel_shift;
         int offset0 = EPEL_EXTRA_BEFORE * (srcstride + (1 << s->ps.sps->pixel_shift));
         int buf_offset0 = EPEL_EXTRA_BEFORE *
@@ -1935,13 +1923,13 @@ static void hls_prediction_unit(HEVCLocalContext *lc, int x0, int y0,
 
     if (current_mv.pred_flag & PF_L0) {
         ref0 = refPicList[0].ref[current_mv.ref_idx[0]];
-        if (!ref0)
+        if (!ref0 || !ref0->frame->data[0])
             return;
         hevc_await_progress(s, ref0, &current_mv.mv[0], y0, nPbH);
     }
     if (current_mv.pred_flag & PF_L1) {
         ref1 = refPicList[1].ref[current_mv.ref_idx[1]];
-        if (!ref1)
+        if (!ref1 || !ref1->frame->data[0])
             return;
         hevc_await_progress(s, ref1, &current_mv.mv[1], y0, nPbH);
     }
@@ -3124,13 +3112,6 @@ static int decode_nal_unit(HEVCContext *s, const H2645NAL *nal)
             if (ret < 0)
                 goto fail;
         } else {
-            if (s->avctx->profile == FF_PROFILE_HEVC_SCC) {
-                av_log(s->avctx, AV_LOG_ERROR,
-                       "SCC profile is not yet implemented in hevc native decoder.\n");
-                ret = AVERROR_PATCHWELCOME;
-                goto fail;
-            }
-
             if (s->threads_number > 1 && s->sh.num_entry_point_offsets > 0)
                 ctb_addr_ts = hls_slice_data_wpp(s, nal);
             else
@@ -3168,6 +3149,93 @@ fail:
         return ret;
     return 0;
 }
+
+static int decode_nal_unit1(HEVCContext *s, const H2645NAL *nal)
+{
+    HEVCLocalContext *lc = s->HEVClc;
+    GetBitContext *gb    = &lc->gb;
+    int ctb_addr_ts, ret;
+
+    *gb              = nal->gb;
+    s->nal_unit_type = nal->type;
+    s->temporal_id   = nal->temporal_id;
+
+    switch (s->nal_unit_type) {
+    case HEVC_NAL_VPS:
+        if (s->avctx->hwaccel && s->avctx->hwaccel->decode_params) {
+            ret = s->avctx->hwaccel->decode_params(s->avctx,
+                                                   nal->type,
+                                                   nal->raw_data,
+                                                   nal->raw_size);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = ff_hevc_decode_nal_vps(gb, s->avctx, &s->ps);
+        if (ret < 0)
+            goto fail;
+        break;
+    case HEVC_NAL_SPS:
+        if (s->avctx->hwaccel && s->avctx->hwaccel->decode_params) {
+            ret = s->avctx->hwaccel->decode_params(s->avctx,
+                                                   nal->type,
+                                                   nal->raw_data,
+                                                   nal->raw_size);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = ff_hevc_decode_nal_sps(gb, s->avctx, &s->ps,
+                                     s->apply_defdispwin);
+        if (ret < 0)
+            goto fail;
+        break;
+    case HEVC_NAL_PPS:
+        if (s->avctx->hwaccel && s->avctx->hwaccel->decode_params) {
+            ret = s->avctx->hwaccel->decode_params(s->avctx,
+                                                   nal->type,
+                                                   nal->raw_data,
+                                                   nal->raw_size);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = ff_hevc_decode_nal_pps(gb, s->avctx, &s->ps);
+        if (ret < 0)
+            goto fail;
+        break;
+    case HEVC_NAL_SEI_PREFIX:
+    case HEVC_NAL_SEI_SUFFIX:
+        if (s->avctx->hwaccel && s->avctx->hwaccel->decode_params) {
+            ret = s->avctx->hwaccel->decode_params(s->avctx,
+                                                   nal->type,
+                                                   nal->raw_data,
+                                                   nal->raw_size);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = ff_hevc_decode_nal_sei(gb, s->avctx, &s->sei, &s->ps, s->nal_unit_type);
+        if (ret < 0)
+            goto fail;
+        break;
+    case HEVC_NAL_EOS_NUT:
+    case HEVC_NAL_EOB_NUT:
+        s->seq_decode = (s->seq_decode + 1) & HEVC_SEQUENCE_COUNTER_MASK;
+        s->max_ra     = INT_MAX;
+        break;
+    case HEVC_NAL_AUD:
+    case HEVC_NAL_FD_NUT:
+    case HEVC_NAL_UNSPEC62:
+        break;
+    default:
+        av_log(s->avctx, AV_LOG_INFO,
+               "Skipping NAL unit %d\n", s->nal_unit_type);
+    }
+
+    return 0;
+fail:
+    if (s->avctx->err_recognition & AV_EF_EXPLODE)
+        return ret;
+    return 0;
+}
+
 
 static int decode_nal_units(HEVCContext *s, const uint8_t *buf, int length)
 {
@@ -3412,11 +3480,15 @@ static int hevc_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
         s->is_decoded = 0;
     }
 
-    if (s->output_frame->buf[0]) {
+    // if (s->output_frame->buf[0]) {
+    //     av_frame_move_ref(rframe, s->output_frame);
+    //     *got_output = 1;
+    // }
+
+    if (s->output_frame->side_data) {
         av_frame_move_ref(rframe, s->output_frame);
         *got_output = 1;
     }
-
     return avpkt->size;
 }
 
