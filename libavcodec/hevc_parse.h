@@ -25,7 +25,7 @@
 #define AVCODEC_HEVC_PARSE_H
 
 #include <stdint.h>
-#include <libavutil/hdr_dynamic_vivid_metadata.h>
+#include "libavutil/hdr_dynamic_vivid_metadata.h"
 
 #include "hevc_ps.h"
 #include "hevc_sei.h"
