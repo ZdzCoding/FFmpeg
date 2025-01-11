@@ -23,7 +23,7 @@ HEADERS = ac3_parser.h                                                  \
           vdpau.h                                                       \
           version.h                                                     \
           version_major.h                                               \
-          hevc_parse.h                                                  \
+          hevc_parse1.h                                                  \
           videotoolbox.h                                                \
           vorbis_parser.h                                               \
           xvmc.h                                                        \
@@ -102,7 +102,7 @@ OBJS-$(CONFIG_H264PARSE)               += h264_parse.o h264_ps.o h2645data.o \
 OBJS-$(CONFIG_H264PRED)                += h264pred.o
 OBJS-$(CONFIG_H264QPEL)                += h264qpel.o
 OBJS-$(CONFIG_H264_SEI)                += h264_sei.o h2645_sei.o
-OBJS-$(CONFIG_HEVCPARSE)               += hevc_parse.o hevc_ps.o hevc_data.o \
+OBJS-$(CONFIG_HEVCPARSE)               += hevc_parse.o hevc_parse1.o hevc_ps.o hevc_data.o \
                                           h2645data.o h2645_parse.o h2645_vui.o
 OBJS-$(CONFIG_HEVC_SEI)                += hevc_sei.o h2645_sei.o \
                                           dynamic_hdr10_plus.o dynamic_hdr_vivid.o

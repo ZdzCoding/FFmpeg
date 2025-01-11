@@ -34,33 +34,5 @@ int ff_hevc_decode_extradata(const uint8_t *data, int size, HEVCParamSets *ps,
                              HEVCSEI *sei, int *is_nalff, int *nal_length_size,
                              int err_recognition, int apply_defdispwin, void *logctx);
 
-int av_hevc_decode_nal_units1(const uint8_t *buf, int buf_size, HEVCParamSets *ps,
-                                 HEVCSEI *sei, int is_nalff, int nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-int av_hevc_decode_nal_units2(const uint8_t *buf, int buf_size, HEVCParamSets *ps,
-                                 HEVCSEI *sei, int *is_nalff, int *nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-int av_hevc_decode_nal_units3(const uint8_t *buf, int buf_size, AVCodecContext *avctx, int *is_nalff, int *nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-int av_hevc_decode_nal_units4(const uint8_t *buf, int buf_size, AVCodecContext *avctx, int is_nalff, int nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-
-int av_hevc_decode_nal_units5(AVDynamicHDRVivid *metadata1,const uint8_t *buf, int buf_size, AVCodecContext *avctx, int is_nalff, int nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-
-int av_hevc_decode_nal_units6(AVBufferRef **side_data_buffers, enum AVFrameSideDataType *side_data_types, int *side_data_count,
-                             const uint8_t *buf, int buf_size, AVCodecContext *avctx, int is_nalff, int nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-int av_hevc_decode_sidedata(AVBufferRef **side_data_buffers, enum AVFrameSideDataType *side_data_types, int *side_data_count,
-                             const uint8_t *buf, int buf_size, AVCodecContext *avctx, int is_nalff, int nal_length_size,
-                             int err_recognition, int apply_defdispwin, void *logctx);
-
-void av_print_dynamic_hdr_vivid_metadata(void *logctx,const AVDynamicHDRVivid *metadata);
 
 #endif /* AVCODEC_HEVC_PARSE_H */
