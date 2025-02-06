@@ -11,6 +11,7 @@ HEADERS = avformat.h                                                    \
           avio_internal.h                                               \
           flv.h                                                         \
           id3v2.h                                                       \
+          dns_cache.h                                                   \
           os_support.h                                                  \
           metadata.h                                                  \
 
@@ -19,6 +20,7 @@ OBJS = allformats.o         \
        avio.o               \
        aviobuf.o            \
        demux.o              \
+       dns_cache.o          \
        demux_utils.o        \
        dump.o               \
        dv.o                 \

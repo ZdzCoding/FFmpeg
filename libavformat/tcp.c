@@ -24,7 +24,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
 #include "libavutil/application.h"
-#include "libavutil/dns_cache.h"
+#include "libavformat/dns_cache.h"
 #include "libavutil/avstring.h"
 
 #include "internal.h"

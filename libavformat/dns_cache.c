@@ -18,9 +18,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/dns_cache.h"
+#include "dns_cache.h"
 #include "libavutil/time.h"
+#include "libavutil/mem.h"
 #include "libavformat/network.h"
+#include <string.h>
+#include <stdlib.h>
 
 #if HAVE_PTHREADS
 #include <pthread.h>
