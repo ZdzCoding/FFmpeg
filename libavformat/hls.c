@@ -73,6 +73,8 @@ enum KeyType {
 };
 
 struct segment {
+    int64_t previous_duration;
+    int64_t start_time;
     int64_t duration;
     int64_t url_offset;
     int64_t size;
@@ -220,6 +222,7 @@ typedef struct HLSContext {
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
     AVDictionary *seg_format_opts;
+    char *seg_inherit_opts;
     char *allowed_extensions;
     int max_reload;
     int http_persistent;
@@ -727,6 +730,8 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
 static int parse_playlist(HLSContext *c, const char *url,
                           struct playlist *pls, AVIOContext *in)
 {
+    int64_t previous_duration1 = 0, previous_duration = 0, total_duration = 0;
+
     int ret = 0, is_segment = 0, is_variant = 0;
     int64_t duration = 0;
     enum KeyType key_type = KEY_NONE;
@@ -798,6 +803,7 @@ static int parse_playlist(HLSContext *c, const char *url,
         pls->finished = 0;
         pls->type = PLS_TYPE_UNSPECIFIED;
     }
+    int start_seq_no = -1;
     while (!avio_feof(in)) {
         ff_get_chomp_line(in, line, sizeof(line));
         if (av_strstart(line, "#EXT-X-STREAM-INF:", &ptr)) {
@@ -847,7 +853,11 @@ static int parse_playlist(HLSContext *c, const char *url,
                         "INT64_MAX/2, mask out the highest bit\n");
                 seq_no &= INT64_MAX/2;
             }
-            pls->start_seq_no = seq_no;
+            /* Some buggy HLS servers write #EXT-X-MEDIA-SEQUENCE more than once */
+            if (start_seq_no < 0) {
+                start_seq_no = seq_no;
+                pls->start_seq_no = seq_no;
+            }
         } else if (av_strstart(line, "#EXT-X-PLAYLIST-TYPE:", &ptr)) {
             ret = ensure_playlist(c, &pls, url);
             if (ret < 0)
@@ -912,6 +922,8 @@ static int parse_playlist(HLSContext *c, const char *url,
         } else if (av_strstart(line, "#EXT-X-ENDLIST", &ptr)) {
             if (pls)
                 pls->finished = 1;
+        } else if (av_strstart(line, "#EXT-X-DISCONTINUITY", &ptr)) {
+            previous_duration = previous_duration1;
         } else if (av_strstart(line, "#EXTINF:", &ptr)) {
             is_segment = 1;
             duration   = atof(ptr) * AV_TIME_BASE;
@@ -987,6 +999,11 @@ static int parse_playlist(HLSContext *c, const char *url,
                                     " set to default value to 1ms.\n", seg->url);
                     duration = 0.001 * AV_TIME_BASE;
                 }
+                previous_duration1 += duration;
+                seg->previous_duration = previous_duration;
+                seg->start_time = total_duration;
+                total_duration += duration;
+
                 seg->duration = duration;
                 seg->key_type = key_type;
                 dynarray_add(&pls->segments, &pls->n_segments, seg);
@@ -1702,7 +1719,10 @@ static int find_timestamp_in_playlist(HLSContext *c, struct playlist *pls,
 
     if (timestamp < pos) {
         *seq_no = pls->start_seq_no;
-        return 0;
+        if (seg_start_ts) {
+            *seg_start_ts = pos;
+        }
+        return 1;
     }
 
     for (i = 0; i < pls->n_segments; i++) {
@@ -1929,7 +1949,32 @@ static int hls_close(AVFormatContext *s)
     return 0;
 }
 
-static int hls_read_header(AVFormatContext *s)
+static int copy_hls_headers_for_http(AVDictionary **dst, const AVDictionary *src, const char *opts)
+{
+    if (!opts)
+        return 0;
+
+    char *my_opts = opts;
+    char *saved = NULL;
+    char *opt = NULL;
+    int ret = 0;
+
+    while ((opt = av_strtok(my_opts, ",", &saved))) {
+        AVDictionaryEntry *t = NULL;
+        while ((t = av_dict_get(src, "", t, AV_DICT_IGNORE_SUFFIX))) {
+            if (t->key && !strcmp(t->key, opt)) {
+                ret = av_dict_set(dst, t->key, t->value, 0);
+                if (ret < 0)
+                    return ret;
+            }
+        }
+        my_opts = saved;
+    }
+
+    return ret;
+}
+
+static int hls_read_header2(AVFormatContext *s, AVDictionary **a_options)
 {
     HLSContext *c = s->priv_data;
     int ret = 0, i;
@@ -1942,8 +1987,19 @@ static int hls_read_header(AVFormatContext *s)
     c->first_timestamp = AV_NOPTS_VALUE;
     c->cur_timestamp = AV_NOPTS_VALUE;
 
+    //pb only include keys which in hls_options list.
     if ((ret = ffio_copy_url_options(s->pb, &c->avio_opts)) < 0)
         return ret;
+
+    //current a_options is original options,you can filter special keys
+    copy_hls_headers_for_http(&c->avio_opts, *a_options, c->seg_inherit_opts);
+    //use segment format options override inherit options.
+    av_dict_copy(&c->avio_opts, c->seg_format_opts, 0);
+
+    // AVDictionaryEntry *t = NULL;
+    // while ((t = av_dict_get(c->avio_opts, "", t, AV_DICT_IGNORE_SUFFIX))) {
+    //     av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %s\n", 12, "hls_read_header2", 28, t->key, t->value);
+    // }
 
     /* XXX: Some HLS servers don't like being sent the range header,
        in this case, need to  setting http_seekable = 0 to disable
@@ -2041,6 +2097,7 @@ static int hls_read_header(AVFormatContext *s)
         pls->needed = 1;
         pls->parent = s;
 
+        av_dict_copy(&options, c->avio_opts, 0);
         /*
          * If this is a live stream and this playlist looks like it is one segment
          * behind, try to sync it up so that every substream starts at the same
@@ -2148,8 +2205,6 @@ static int hls_read_header(AVFormatContext *s)
 
         if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
             return ret;
-
-        av_dict_copy(&options, c->seg_format_opts, 0);
 
         ret = avformat_open_input(&pls->ctx, pls->segments[0]->url, in_fmt, &options);
         av_dict_free(&options);
@@ -2303,6 +2358,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
          * stream */
         if (pls->needed && !pls->pkt->data) {
             while (1) {
+                int64_t pkt_ts = AV_NOPTS_VALUE;
                 int64_t ts_diff;
                 AVRational tb;
                 struct segment *seg = NULL;
@@ -2316,12 +2372,40 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     if (pls->is_id3_timestamped && pls->pkt->stream_index == 0) {
                         /* audio elementary streams are id3 timestamped */
                         fill_timing_for_id3_timestamped_stream(pls);
+                    } else {
+                        //discontinuity:ts pts need add up.
+                        if (pls->finished) {
+                            int seq_no = pls->cur_seq_no - pls->start_seq_no;
+                            if (seq_no < pls->n_segments && s->streams[pkt->stream_index]) {
+                                struct segment *seg = pls->segments[seq_no];
+                                if (seg->previous_duration > 0) {
+                                    int64_t pred = av_rescale_q(seg->previous_duration,
+                                                            AV_TIME_BASE_Q,
+                                                            s->streams[pkt->stream_index]->time_base);
+                                    int64_t max_ts = av_rescale_q(seg->start_time + seg->duration,
+                                                                AV_TIME_BASE_Q,
+                                                                s->streams[pkt->stream_index]->time_base);
+                                    /* EXTINF duration is not precise enough */
+                                    max_ts += 2 * AV_TIME_BASE;
+                                    if (s->start_time > 0) {
+                                        max_ts += av_rescale_q(s->start_time,
+                                                            AV_TIME_BASE_Q,
+                                                            s->streams[pkt->stream_index]->time_base);
+                                    }
+                                    if (pls->pkt->dts != AV_NOPTS_VALUE && pls->pkt->dts + pred < max_ts) pls->pkt->dts += pred;
+                                    if (pls->pkt->pts != AV_NOPTS_VALUE && pls->pkt->pts + pred < max_ts) pls->pkt->pts += pred;
+                                }
+                            }
+                        }
                     }
 
-                    if (c->first_timestamp == AV_NOPTS_VALUE &&
-                        pls->pkt->dts       != AV_NOPTS_VALUE)
-                        c->first_timestamp = av_rescale_q(pls->pkt->dts,
-                            get_timebase(pls), AV_TIME_BASE_Q);
+                    if (pls->pkt->pts != AV_NOPTS_VALUE)
+                        pkt_ts = pls->pkt->pts;
+                    else if (pls->pkt->dts != AV_NOPTS_VALUE)
+                        pkt_ts = pls->pkt->dts;
+
+                    if (c->first_timestamp == AV_NOPTS_VALUE && pkt_ts != AV_NOPTS_VALUE)
+                        c->first_timestamp = av_rescale_q(pkt_ts, get_timebase(pls), AV_TIME_BASE_Q);
                 }
 
                 seg = current_segment(pls);
@@ -2338,13 +2422,13 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 if (pls->seek_stream_index < 0 ||
                     pls->seek_stream_index == pls->pkt->stream_index) {
 
-                    if (pls->pkt->dts == AV_NOPTS_VALUE) {
+                    if (pkt_ts == AV_NOPTS_VALUE) {
                         pls->seek_timestamp = AV_NOPTS_VALUE;
                         break;
                     }
 
                     tb = get_timebase(pls);
-                    ts_diff = av_rescale_rnd(pls->pkt->dts, AV_TIME_BASE,
+                    ts_diff = av_rescale_rnd(pkt_ts, AV_TIME_BASE,
                                             tb.den, AV_ROUND_DOWN) -
                             pls->seek_timestamp;
                     if (ts_diff >= 0 && (pls->seek_flags  & AVSEEK_FLAG_ANY ||
@@ -2562,6 +2646,7 @@ static const AVOption hls_options[] = {
         OFFSET(seg_format_opts), AV_OPT_TYPE_DICT, {.str = NULL}, 0, 0, FLAGS},
     {"seg_max_retry", "Maximum number of times to reload a segment on error.",
      OFFSET(seg_max_retry), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, FLAGS},
+    {"seg_inherit_options", "Special keys inherit form options,apply for segment demuxer", OFFSET(seg_inherit_opts), AV_OPT_TYPE_STRING, {.str = NULL}, INT_MIN, INT_MAX, FLAGS},
     {NULL}
 };
 
@@ -2580,8 +2665,7 @@ const AVInputFormat ff_hls_demuxer = {
     .flags          = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = hls_probe,
-    .read_header    = hls_read_header,
-    .read_header2    = hls_read_header,
+    .read_header2    = hls_read_header2,
     .read_packet    = hls_read_packet,
     .read_close     = hls_close,
     .read_seek      = hls_read_seek,

@@ -512,8 +512,6 @@ extern const AVInputFormat  ff_xwma_demuxer;
 extern const AVInputFormat  ff_yop_demuxer;
 extern const AVInputFormat  ff_yuv4mpegpipe_demuxer;
 extern const FFOutputFormat ff_yuv4mpegpipe_muxer;
-extern AVInputFormat  ff_ijklivehook_demuxer;
-extern AVInputFormat  ff_ijklas_demuxer;
 /* image demuxers */
 extern const AVInputFormat  ff_image_bmp_pipe_demuxer;
 extern const AVInputFormat  ff_image_cri_pipe_demuxer;
@@ -558,6 +556,9 @@ extern const AVInputFormat  ff_libgme_demuxer;
 extern const AVInputFormat  ff_libmodplug_demuxer;
 extern const AVInputFormat  ff_libopenmpt_demuxer;
 extern const AVInputFormat  ff_vapoursynth_demuxer;
+
+extern AVInputFormat  ff_ijklivehook_demuxer;
+extern AVInputFormat  ff_ijklas_demuxer;
 
 #include "libavformat/muxer_list.c"
 #include "libavformat/demuxer_list.c"

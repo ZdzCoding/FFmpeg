@@ -44,6 +44,7 @@
 #include "url.h"
 #include "version.h"
 
+
 /* XXX: POST protocol is not completely implemented because ffmpeg uses
  * only a subset of it. */
 
@@ -77,6 +78,7 @@ typedef struct HTTPContext {
     char *uri;
     char *location;
     HTTPAuthState auth_state;
+    int auth_type2;
     HTTPAuthState proxy_auth_state;
     char *http_proxy;
     char *headers;
@@ -125,6 +127,7 @@ typedef struct HTTPContext {
     int reconnect_on_network_error;
     int reconnect_streamed;
     int reconnect_delay_max;
+    int reconnect_first_delay;
     char *reconnect_on_http_error;
     int listen;
     char *resource;
@@ -138,7 +141,7 @@ typedef struct HTTPContext {
     AVDictionary *redirect_cache;
     uint64_t filesize_from_content_range;
     char *tcp_hook;
-    char * app_ctx_intptr;
+    char *app_ctx_intptr;
     AVApplicationContext *app_ctx;
 } HTTPContext;
 
@@ -165,6 +168,7 @@ static const AVOption options[] = {
     { "icy_metadata_packet", "return current ICY metadata packet", OFFSET(icy_metadata_packet), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_EXPORT },
     { "metadata", "metadata read from the bitstream", OFFSET(metadata), AV_OPT_TYPE_DICT, {0}, 0, 0, AV_OPT_FLAG_EXPORT },
     { "auth_type", "HTTP authentication type", OFFSET(auth_state.auth_type), AV_OPT_TYPE_INT, { .i64 = HTTP_AUTH_NONE }, HTTP_AUTH_NONE, HTTP_AUTH_BASIC, D | E, "auth_type"},
+    { "auth_type2", "backup HTTP authentication type for seek request", OFFSET(auth_type2), AV_OPT_TYPE_INT, { .i64 = HTTP_AUTH_NONE }, HTTP_AUTH_NONE, HTTP_AUTH_BASIC, D | E, "auth_type"},
     { "none", "No auth method set, autodetect", 0, AV_OPT_TYPE_CONST, { .i64 = HTTP_AUTH_NONE }, 0, 0, D | E, "auth_type"},
     { "basic", "HTTP basic authentication", 0, AV_OPT_TYPE_CONST, { .i64 = HTTP_AUTH_BASIC }, 0, 0, D | E, "auth_type"},
     { "send_expect_100", "Force sending an Expect: 100-continue header for POST", OFFSET(send_expect_100), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, E },
@@ -178,6 +182,7 @@ static const AVOption options[] = {
     { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_delay_max", "max reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_max), AV_OPT_TYPE_INT, { .i64 = 120 }, 0, UINT_MAX/1000/1000, D },
+    { "reconnect_first_delay", "first reconnect delay in seconds", OFFSET(reconnect_first_delay), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, UINT_MAX/1000/1000, D },
     { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, D | E },
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
@@ -213,9 +218,7 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     char path1[MAX_URL_SIZE], sanitized_path[MAX_URL_SIZE + 1];
     char buf[1024], urlbuf[MAX_URL_SIZE];
     int port, use_proxy, err = 0;
-    char prev_location[4096];
     HTTPContext *s = h->priv_data;
-
     lower_proto = s->tcp_hook;
 
     av_url_split(proto, sizeof(proto), auth, sizeof(auth),
@@ -232,7 +235,6 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     freeenv_utf8(env_no_proxy);
 
     if (!strcmp(proto, "https")) {
-        av_dict_set_int(options, "fastopen", 0, 0);
         lower_proto = "tls";
         use_proxy   = 0;
         if (port < 0)
@@ -274,13 +276,18 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
 
     if (!s->hd) {
         av_dict_set_intptr(options, "ijkapplication", (uintptr_t)s->app_ctx, 0);
+
+        // AVDictionaryEntry *t = NULL;
+        // while ((t = av_dict_get(*options, "", t, AV_DICT_IGNORE_SUFFIX))) {
+        //     av_log(NULL, AV_LOG_INFO, "%-*s: %-*s = %s\n", 12, "http open tcp", 28, t->key, t->value);
+        // }
+
         err = ffurl_open_whitelist(&s->hd, buf, AVIO_FLAG_READ_WRITE,
                                    &h->interrupt_callback, options,
                                    h->protocol_whitelist, h->protocol_blacklist, h);
     }
 
 end:
-    av_strlcpy(prev_location, s->location, sizeof(prev_location));
     freeenv_utf8(env_http_proxy);
     return err < 0 ? err : http_connect(
         h, path, local_path, hoststr, auth, proxyauth);
@@ -366,7 +373,7 @@ static int http_open_cnx(URLContext *h, AVDictionary **options)
     HTTPAuthType cur_auth_type, cur_proxy_auth_type;
     HTTPContext *s = h->priv_data;
     int ret, attempts = 0, redirects = 0;
-    int reconnect_delay = 0;
+    int reconnect_delay = s->reconnect_first_delay;
     uint64_t off;
     char *cached;
 
@@ -695,8 +702,12 @@ static int http_open(URLContext *h, const char *uri, int flags,
 {
     HTTPContext *s = h->priv_data;
     int ret;
-
     s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
+
+    if (s->auth_type2 == HTTP_AUTH_NONE) {
+        //backup the init auth_type, when not assign.
+        s->auth_type2 = s->auth_state.auth_type;
+    }
 
     if( s->seekable == 1 )
         h->is_streamed = 0;
@@ -1421,9 +1432,9 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     AVBPrint request;
     char *authstr = NULL, *proxyauthstr = NULL;
     uint64_t off = s->off;
-    uint64_t filesize = s->filesize;
     const char *method;
     int send_expect_100 = 0;
+    int cur_auth_type = s->auth_state.auth_type;
 
     av_bprint_init_for_buffer(&request, s->buffer, sizeof(s->buffer));
 
@@ -1565,18 +1576,19 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
 
     if (s->new_location)
         s->off = off;
-
-    /* Some buggy servers may missing 'Content-Range' header for range request */
-    if (off > 0 && s->off <= 0 && (off + s->filesize == filesize)) {
-        av_log(NULL, AV_LOG_WARNING,
-               "try to fix missing 'Content-Range' at server side (%"PRId64",%"PRId64") => (%"PRId64",%"PRId64")",
-               s->off, s->filesize, off, filesize);
-        s->off = off;
-        s->filesize = filesize;
-    }
-
     err = (off == s->off) ? 0 : -1;
+
+    //in http_seek_internal func reverted to the original uri,but the s->off is not zero，so err is -1，cause can't goto the 401 authenticate logic.
+    if (err != 0 && cur_auth_type != s->auth_state.auth_type && s->http_code == 401) {
+        //reverte the off,otherwise can't seek the target position.
+        s->off = off;
+        av_log(NULL, AV_LOG_ERROR, "http 401 error,need authenticate:%s,at:%llu\n", s->buffer, s->off);
+        err = 0;
+    }
 done:
+    if (err != 0) {
+        av_log(NULL, AV_LOG_ERROR, "http error %d,%s\n", s->http_code,s->buffer);
+    }
     av_freep(&authstr);
     av_freep(&proxyauthstr);
     return err;
@@ -1636,16 +1648,14 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         uint64_t target_end = s->end_off ? s->end_off : s->filesize;
         if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
             return AVERROR_EOF;
-        
         len = size;
-        if (s->filesize > 0 && s->filesize != UINT64_MAX && s->filesize != 2147483647) {
+        if (s->filesize > 0 && s->filesize != UINT64_MAX && s->filesize != INT32_MAX) {
             int64_t unread = s->filesize - s->off;
             if (len > unread)
                 len = (int)unread;
         }
         if (len > 0)
             len = ffurl_read(s->hd, buf, len);
-
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
@@ -1968,6 +1978,8 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
             return s->off;
     }
 
+    // http_seek use lasest redirect location, because after redirect, reset the auth_state: `memset(&s->auth_state, 0, sizeof(s->auth_state));`
+
     /* if the location changed (redirect), revert to the original uri */
     if (strcmp(s->uri, s->location)) {
         char *new_uri;
@@ -1976,6 +1988,9 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
             return AVERROR(ENOMEM);
         av_free(s->location);
         s->location = new_uri;
+        if (s->auth_type2 != HTTP_AUTH_NONE) {
+            s->auth_state.auth_type = s->auth_type2;
+        }
     }
 
     /* we save the old context in case the seek fails */
@@ -2090,7 +2105,6 @@ static int http_proxy_open(URLContext *h, const char *uri, int flags)
     char *authstr;
 
     s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
-
     if( s->seekable == 1 )
         h->is_streamed = 0;
     else

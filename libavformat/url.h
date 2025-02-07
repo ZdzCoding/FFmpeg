@@ -50,6 +50,7 @@ typedef struct URLContext {
     int min_packet_size;        /**< if non zero, the stream is packetized with this min packet size */
 } URLContext;
 
+typedef struct AVFormatContext AVFormatContext;
 typedef struct URLProtocol {
     const char *name;
     int     (*url_open)( URLContext *h, const char *url, int flags);
@@ -95,6 +96,7 @@ typedef struct URLProtocol {
     int (*url_close_dir)(URLContext *h);
     int (*url_delete)(URLContext *h);
     int (*url_move)(URLContext *h_src, URLContext *h_dst);
+    int (*url_parse_priv)(AVFormatContext *ic, URLContext *h);
     const char *default_whitelist;
 } URLProtocol;
 

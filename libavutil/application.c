@@ -22,9 +22,7 @@
 #include "libavformat/network.h"
 #include "libavutil/avstring.h"
 
-void av_application_on_io_traffic(AVApplicationContext *h, AVAppIOTraffic *event);
-
-int av_application_alloc(AVApplicationContext **ph, void *opaque)
+static int av_application_alloc(AVApplicationContext **ph, void *opaque)
 {
     AVApplicationContext *h = NULL;
 
@@ -47,7 +45,7 @@ int av_application_open(AVApplicationContext **ph, void *opaque)
     return 0;
 }
 
-void av_application_close(AVApplicationContext *h)
+static void av_application_close(AVApplicationContext *h)
 {
     av_free(h);
 }
@@ -126,7 +124,7 @@ void av_application_did_http_seek(AVApplicationContext *h, void *obj, const char
     av_application_on_http_event(h, AVAPP_EVENT_DID_HTTP_SEEK, &event);
 }
 
-void av_application_on_io_traffic(AVApplicationContext *h, AVAppIOTraffic *event)
+static void av_application_on_io_traffic(AVApplicationContext *h, AVAppIOTraffic *event)
 {
     if (h && h->func_on_app_event)
         h->func_on_app_event(h, AVAPP_EVENT_IO_TRAFFIC, (void *)event, sizeof(AVAppIOTraffic));

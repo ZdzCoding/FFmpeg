@@ -63,7 +63,7 @@ AVDictionaryEntry *av_dict_get(const AVDictionary *m, const char *key,
     const AVDictionaryEntry *entry = prev;
     unsigned int j;
 
-    if (!key)
+    if (!m || !key)
         return NULL;
 
     while ((entry = av_dict_iterate(m, entry))) {
