@@ -13,8 +13,7 @@ HEADERS = avformat.h                                                    \
           id3v2.h                                                       \
           os_support.h                                                  \
           metadata.h                                                    \
-          application.h                                                 \
-		  dns_cache.h                                                   \
+	   dns_cache.h                                                   \
 
 OBJS = allformats.o         \
        avformat.o           \
@@ -41,8 +40,7 @@ OBJS = allformats.o         \
        utils.o              \
        version.o            \
        ijkutils.o           \
-       application.o        \
-	   dns_cache.o          \
+	dns_cache.o          \
 
 OBJS-$(HAVE_LIBC_MSVCRT)                 += file_open.o
 

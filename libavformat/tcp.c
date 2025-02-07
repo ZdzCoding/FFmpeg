@@ -25,7 +25,7 @@
 #include "libavutil/time.h"
 #include "libavutil/avstring.h"
 #include "dns_cache.h"
-#include "application.h"
+#include "libavutil/application.h"
 #include "internal.h"
 #include "network.h"
 #include "os_support.h"
