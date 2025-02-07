@@ -19,6 +19,8 @@
  */
 
 #include "application.h"
+#include "libavformat/network.h"
+#include "libavutil/avstring.h"
 
 static int av_application_alloc(AVApplicationContext **ph, void *opaque)
 {

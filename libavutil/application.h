@@ -22,8 +22,6 @@
 #define AVUTIL_APPLICATION_H
 
 #include <stdio.h>
-#include "libavformat/network.h"
-#include "libavutil/avstring.h"
 #include "libavutil/mem.h"
 
 #define AVAPP_EVENT_WILL_HTTP_OPEN  1 //AVAppHttpEvent
