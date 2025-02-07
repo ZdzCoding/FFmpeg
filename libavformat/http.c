@@ -33,6 +33,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
 #include "libavutil/parseutils.h"
+#include "libavutil/application.h"
 
 #include "avformat.h"
 #include "http.h"
@@ -42,7 +43,7 @@
 #include "os_support.h"
 #include "url.h"
 #include "version.h"
-#include "application.h"
+
 
 /* XXX: POST protocol is not completely implemented because ffmpeg uses
  * only a subset of it. */
