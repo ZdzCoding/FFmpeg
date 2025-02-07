@@ -21,9 +21,7 @@
 #ifndef AVUTIL_APPLICATION_H
 #define AVUTIL_APPLICATION_H
 
-#include "libavutil/log.h"
-#include <stddef.h>
-#include <stdint.h>
+#include <stdio.h>
 #include "libavutil/mem.h"
 
 #define AVAPP_EVENT_WILL_HTTP_OPEN  1 //AVAppHttpEvent
@@ -92,33 +90,32 @@ typedef struct AVAppIOTraffic
 } AVAppIOTraffic;
 
 typedef struct AVApplicationContext AVApplicationContext;
+typedef struct AVClass AVClass;
 struct AVApplicationContext {
     const AVClass *av_class;    /**< information for av_log(). Set by av_application_open(). */
     void *opaque;               /**< user data. */
-
     int (*func_on_app_event)(AVApplicationContext *h, int event_type ,void *obj, size_t size);
 };
 
-int  av_application_alloc(AVApplicationContext **ph, void *opaque);
+// open/close
 int  av_application_open(AVApplicationContext **ph, void *opaque);
-void av_application_close(AVApplicationContext *h);
 void av_application_closep(AVApplicationContext **ph);
 
+// custom protocol invoke
 void av_application_on_http_event(AVApplicationContext *h, int event_type, AVAppHttpEvent *event);
+int  av_application_on_io_control(AVApplicationContext *h, int event_type, AVAppIOControl *control);
+void av_application_on_async_statistic(AVApplicationContext *h, AVAppAsyncStatistic *statistic);
+void av_application_on_async_read_speed(AVApplicationContext *h, AVAppAsyncReadSpeed *speed);
+
+// http event
 void av_application_will_http_open(AVApplicationContext *h, void *obj, const char *url);
 void av_application_did_http_open(AVApplicationContext *h, void *obj, const char *url, int error, int http_code, int64_t filesize);
 void av_application_will_http_seek(AVApplicationContext *h, void *obj, const char *url, int64_t offset);
 void av_application_did_http_seek(AVApplicationContext *h, void *obj, const char *url, int64_t offset, int error, int http_code);
-
-void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes);
-
-int  av_application_on_io_control(AVApplicationContext *h, int event_type, AVAppIOControl *control);
-
+//tcp event
 int av_application_on_tcp_will_open(AVApplicationContext *h);
 int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control);
-
-void av_application_on_async_statistic(AVApplicationContext *h, AVAppAsyncStatistic *statistic);
-void av_application_on_async_read_speed(AVApplicationContext *h, AVAppAsyncReadSpeed *speed);
-
+//tcp speed
+void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes);
 
 #endif /* AVUTIL_APPLICATION_H */

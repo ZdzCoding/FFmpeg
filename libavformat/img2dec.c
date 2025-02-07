@@ -487,7 +487,13 @@ int ff_img_read_packet(AVFormatContext *s1, AVPacket *pkt)
         if (s->frame_size > 0) {
             size[0] = s->frame_size;
         } else if (!ffstream(s1->streams[0])->parser) {
-            size[0] = avio_size(s1->pb);
+            //http Transfer-Encoding: chunked the size is -78;
+            int64_t s = avio_size(s1->pb);
+            if (s < 0) {
+                size[0] = 4096;
+            } else {
+                size[0] = s;
+            }
         } else {
             size[0] = 4096;
         }
@@ -906,7 +912,7 @@ static int png_probe(const AVProbeData *p)
 {
     const uint8_t *b = p->buf;
 
-    if (AV_RB64(b) == 0x89504e470d0a1a0a)
+    if (AV_RB64(b) == 0x89504e470d0a1a0a || AV_RB64(b)  == 0x8a4d4e470d0a1a0a)
         return AVPROBE_SCORE_MAX - 1;
     return 0;
 }
