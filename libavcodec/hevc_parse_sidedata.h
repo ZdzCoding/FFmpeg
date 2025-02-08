@@ -30,16 +30,6 @@
 #include "avcodec.h"
 
 
-// int av_h_decode_nal_units3(const uint8_t *buf, int buf_size, AVCodecContext *avctx, int *is_nalff, int *nal_length_size,
-//                              int err_recognition, int apply_defdispwin, void *logctx);
-//
-// int av_hevc_decode_sidedata(AVBufferRef **side_data_buffers, enum AVFrameSideDataType *side_data_types, int *side_data_count,
-//                              const uint8_t *buf, int buf_size, AVCodecContext *avctx, int is_nalff, int nal_length_size,
-//                              int err_recognition, int apply_defdispwin, void *logctx);
-
-
 int av_hevc_decode_extradata(AVBufferRef **side_data_buffers, enum AVFrameSideDataType *side_data_types, int *side_data_count,AVCodecContext *avctx, AVPacket *pkt, int *is_nalff, int *nal_length_size,int *extradata_parsed);
-
-// void av_print_dynamic_hdr_vivid_metadata(void *logctx,const AVDynamicHDRVivid *metadata);
 
 #endif /* AVCODEC_HEVC_PARSE_SIDEDATA_H */
