@@ -21,11 +21,6 @@
 #include "hevc.h"
 #include "hevc_parse.h"
 
-#include <libavutil/hdr_dynamic_vivid_metadata.h>
-#include <libavutil/mastering_display_metadata.h>
-
-#include "hevcdec.h"
-
 static int hevc_decode_nal_units(const uint8_t *buf, int buf_size, HEVCParamSets *ps,
                                  HEVCSEI *sei, int is_nalff, int nal_length_size,
                                  int err_recognition, int apply_defdispwin, void *logctx)
